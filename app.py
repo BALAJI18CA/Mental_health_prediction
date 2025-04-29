@@ -14,8 +14,6 @@ from nltk.corpus import stopwords
 import os
 import logging
 import gdown
-import zipfile
-import shutil
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -43,45 +41,21 @@ def download_nltk_data():
 download_nltk_data()
 stop_words = set(stopwords.words('english'))
 
-# Initialize BERT with caching and cloud storage fallback
+# Initialize BERT with direct download and error handling
 @st.cache_resource
 def load_bert():
     try:
-        cache_dir = "./bert_cache"
-        os.makedirs(cache_dir, exist_ok=True)
-        logger.info(f"Using cache directory: {cache_dir}")
-        
-        # Remove problematic bert-base-uncased directory if exists
-        problematic_dir = os.path.join(cache_dir, 'bert-base-uncased')
-        if os.path.exists(problematic_dir):
-            logger.warning(f"Removing problematic directory: {problematic_dir}")
-            shutil.rmtree(problematic_dir)
-        
-        # Try loading from cache
-        try:
-            tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', cache_dir=cache_dir)
-            model = BertModel.from_pretrained('bert-base-uncased', cache_dir=cache_dir)
-        except Exception as e:
-            logger.warning(f"Failed to load BERT from Hugging Face: {str(e)}. Attempting to download from Google Drive.")
-            # Download BERT files from Google Drive
-            bert_url = 'YOUR_GOOGLE_DRIVE_LINK'  # Replace with your Google Drive link for bert_cache.tar.gz
-            output_path = os.path.join(cache_dir, 'bert_cache.tar.gz')
-            gdown.download(bert_url, output_path, quiet=False)
-            # Extract the tar.gz file
-            with zipfile.ZipFile(output_path, 'r') as zip_ref:
-                zip_ref.extractall(cache_dir)
-            # Try loading again
-            tokenizer = BertTokenizer.from_pretrained(cache_dir, cache_dir=cache_dir)
-            model = BertModel.from_pretrained(cache_dir, cache_dir=cache_dir)
-        
+        logger.info("Attempting to load BERT tokenizer and model from Hugging Face")
+        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        model = BertModel.from_pretrained('bert-base-uncased')
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model.eval().to(device)
         logger.info("BERT model and tokenizer loaded successfully")
         return tokenizer, model, device
     except Exception as e:
         logger.error(f"Error loading BERT: {str(e)}")
-        st.error(f"Error loading BERT: {str(e)}")
-        raise
+        st.warning(f"Failed to load BERT model: {str(e)}. Text-based features will be unavailable.")
+        return None, None, None
 
 # Load BERT
 bert_tokenizer, bert_model, device = load_bert()
@@ -226,7 +200,7 @@ def get_metrics():
             'Severe': {'precision': 0.8571, 'recall': 0.8750, 'f1-score': 0.8660, 'support': 48},
             'accuracy': 0.8642,
             'macro avg': {'precision': 0.8633, 'recall': 0.8627, 'f1-score': 0.8628, 'support': 192},
-            'weighted avg': {'precision': 0.8643, 'recall': 0.8622, 'f1-score': 0.8641, 'support': 192}
+            'weighted avg': {'precision': 0.8643, 'recall': 0.8642, 'f1-score': 0.8641, 'support': 192}
         },
         'bert_only': {
             'None': {'precision': 0.8491, 'recall': 0.8182, 'f1-score': 0.8333, 'support': 110},
@@ -272,6 +246,9 @@ def preprocess_text(text):
 
 # BERT Embedding Function
 def get_bert_embedding(text):
+    if bert_tokenizer is None or bert_model is None:
+        logger.warning("BERT model not available. Returning zero embedding.")
+        return np.zeros(768)
     try:
         if not text.strip():
             return np.zeros(768)
@@ -454,6 +431,10 @@ def show_chatbot():
     All conversations are anonymous and not stored.
     """)
     
+    if bert_tokenizer is None or bert_model is None:
+        st.warning("BERT model is unavailable. Chatbot functionality is limited. Please try again later or contact support.")
+        return
+    
     if "messages" not in st.session_state:
         st.session_state.messages = []
         st.session_state.conversation = []
@@ -488,7 +469,7 @@ def show_chatbot():
                         st.session_state.depression_level = depression_level
                         response = get_chatbot_response(depression_level)
                     else:
-                        response = "BERT-only model not available. Ensure 'bert_only_fusion_model.keras' is in the same directory as app.py."
+                        response = "BERT-only model not available. Ensure 'bert_only_fusion_model.keras' is in the same directory as app.py or uploaded to Google Drive."
             except Exception as e:
                 logger.error(f"Error processing chatbot message: {str(e)}")
                 st.error(f"Error processing your message: {str(e)}")
@@ -611,13 +592,19 @@ def show_client_input():
                     
                     text_embedding = np.zeros(768)
                     if statement and isinstance(statement, str) and statement.strip():
-                        processed_text = preprocess_text(statement)
-                        text_embedding = get_bert_embedding(processed_text)
+                        if bert_tokenizer is None or bert_model is None:
+                            st.warning("BERT model is unavailable. Text input will be ignored.")
+                        else:
+                            processed_text = preprocess_text(statement)
+                            text_embedding = get_bert_embedding(processed_text)
                     
                     text_input = text_embedding.reshape(1, -1).astype('float32')
                     
                     if models[selected_model] is not None:
                         if selected_model == 'bert_only':
+                            if bert_tokenizer is None or bert_model is None:
+                                st.error("BERT model is unavailable. Cannot use BERT-Only model.")
+                                return
                             prediction = models[selected_model].predict(
                                 [text_input, text_input], verbose=0
                             )
@@ -652,7 +639,7 @@ def show_client_input():
                             - Don't hesitate to seek help if needed
                             """)
                     else:
-                        st.error(f"{model_choice} model not available. Ensure the corresponding .keras file is in the same directory as app.py.")
+                        st.error(f"{model_choice} model not available. Ensure the corresponding .keras file is in the same directory as app.py or uploaded to Google Drive.")
                 
                 except Exception as e:
                     logger.error(f"Error processing assessment: {str(e)}")
