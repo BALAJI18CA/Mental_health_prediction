@@ -22,21 +22,34 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize NLTK
-nltk.download('punkt')
-nltk.download('stopwords')
+# Initialize NLTK with caching
+@st.cache_resource
+def download_nltk_data():
+    try:
+        nltk.download('punkt', quiet=True)
+        nltk.download('stopwords', quiet=True)
+    except Exception as e:
+        st.error(f"Error downloading NLTK data: {str(e)}")
+        raise
+download_nltk_data()
 stop_words = set(stopwords.words('english'))
 
-# Initialize BERT with caching
+# Initialize BERT with caching and custom cache directory
 @st.cache_resource
 def load_bert():
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-    model = BertModel.from_pretrained('bert-base-uncased')
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model.eval().to(device)
-    return tokenizer, model, device
+    try:
+        cache_dir = "./bert_cache"
+        os.makedirs(cache_dir, exist_ok=True)
+        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', cache_dir=cache_dir)
+        model = BertModel.from_pretrained('bert-base-uncased', cache_dir=cache_dir)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model.eval().to(device)
+        return tokenizer, model, device
+    except Exception as e:
+        st.error(f"Error loading BERT: {str(e)}")
+        raise
 
-# Load BERT after set_page_config
+# Load BERT
 bert_tokenizer, bert_model, device = load_bert()
 
 # Custom CSS for styling
@@ -91,10 +104,9 @@ st.markdown("""
 # Depression level labels
 levels = ['None', 'Mild', 'Moderate', 'Severe']
 
-# Get absolute path to models in the root project directory
+# Get absolute path to models in the root directory
 def get_model_path(model_name):
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    # Use root project directory instead of processed_dataset
     model_filenames = {
         'autoencoder': 'autoencoder.keras',
         'bert_only': 'bert_only_fusion_model.keras',
@@ -120,46 +132,41 @@ def load_models():
                 models[model_name] = load_model(model_path)
                 st.success(f"Successfully loaded {model_name} model from {model_path}")
             else:
-                st.error(f"Model file for {model_name} not found at {model_path}. Please ensure the file exists in the project directory.")
+                st.warning(f"Model file for {model_name} not found at {model_path}. Ensure the .keras file is in the same directory as app.py.")
         except Exception as e:
             st.error(f"Error loading {model_name} from {model_path}: {str(e)}")
     
     return models
 
-# Load models after set_page_config
+# Load models
 models = load_models()
 
-# Sample evaluation metrics (updated with actual metrics from training)
+# Sample evaluation metrics
 def get_metrics():
-    # Define metrics based on provided output
     metrics = {
         'federated_fusion': {
-            'accuracy': 0.862069,  # From Model Performance Metrics
-            'f1': 0.862067,        # From Model Performance Metrics
-            'recall': 0.862069,    # From Model Performance Metrics
+            'accuracy': 0.862069,
+            'f1': 0.862067,
+            'recall': 0.862069,
             'confusion_matrix': None,
             'class_report': None
         },
         'full_fusion': {
-            'accuracy': 0.864224,  # From Model Performance Metrics
-            'f1': 0.864058,        # From Model Performance Metrics
-            'recall': 0.864224,    # From Model Performance Metrics
+            'accuracy': 0.864224,
+            'f1': 0.864058,
+            'recall': 0.864224,
             'confusion_matrix': None,
             'class_report': None
         },
         'bert_only': {
-            'accuracy': 0.855603,  # From Model Performance Metrics
-            'f1': 0.855558,        # From Model Performance Metrics
-            'recall': 0.855603,    # From Model Performance Metrics
+            'accuracy': 0.855603,
+            'f1': 0.855558,
+            'recall': 0.855603,
             'confusion_matrix': None,
             'class_report': None
         }
     }
 
-    # Define class names
-    levels = ['None', 'Mild', 'Moderate', 'Severe']
-
-    # Detailed classification reports from provided output
     class_reports = {
         'federated_fusion': {
             'None': {'precision': 0.8972, 'recall': 0.8727, 'f1-score': 0.8848, 'support': 110},
@@ -190,7 +197,6 @@ def get_metrics():
         }
     }
 
-    # Generate approximate confusion matrices based on classification reports
     for model_name in ['federated_fusion', 'full_fusion', 'bert_only']:
         cm = np.zeros((4, 4), dtype=int)
         for i, level in enumerate(levels):
@@ -199,17 +205,14 @@ def get_metrics():
             true_positives = int(round(recall * support))
             cm[i, i] = true_positives
             false_negatives = support - true_positives
-            # Distribute false negatives randomly to other classes
             if false_negatives > 0:
                 other_classes = [j for j in range(4) if j != i]
                 fn_per_class = false_negatives // len(other_classes)
                 for j in other_classes:
                     cm[i, j] += fn_per_class
-                # Handle any remaining false negatives
                 remaining = false_negatives - fn_per_class * len(other_classes)
                 if remaining > 0:
                     cm[i, other_classes[0]] += remaining
-        # Ensure total support matches
         metrics[model_name]['confusion_matrix'] = cm
         metrics[model_name]['class_report'] = class_reports[model_name]
 
@@ -230,7 +233,6 @@ def get_bert_embedding(text):
     try:
         if not text.strip():
             return np.zeros(768)
-        
         inputs = bert_tokenizer(text, return_tensors='pt', padding=True, truncation=True, max_length=128)
         inputs = {k: v.to(device) for k, v in inputs.items()}
         with torch.no_grad():
@@ -443,7 +445,7 @@ def show_chatbot():
                         st.session_state.depression_level = depression_level
                         response = get_chatbot_response(depression_level)
                     else:
-                        response = "BERT-only model not available. Please ensure 'bert_only_fusion_model.keras' is in the project directory (C:\\Users\\balaj\\Desktop\\mental_health_prediction\\) and try again."
+                        response = "BERT-only model not available. Ensure 'bert_only_fusion_model.keras' is in the same directory as app.py."
             except Exception as e:
                 st.error(f"Error processing your message: {str(e)}")
                 response = "I encountered an error processing your message. Please try again."
@@ -606,7 +608,7 @@ def show_client_input():
                             - Don't hesitate to seek help if needed
                             """)
                     else:
-                        st.error(f"{model_choice} model not available. Please ensure the corresponding .keras file is in the project directory.")
+                        st.error(f"{model_choice} model not available. Ensure the corresponding .keras file is in the same directory as app.py.")
                 
                 except Exception as e:
                     st.error(f"Error processing your assessment: {str(e)}")
