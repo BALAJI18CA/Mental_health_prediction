@@ -14,6 +14,9 @@ from nltk.corpus import stopwords
 import os
 import logging
 import gdown
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+import time
+import shutil
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -41,21 +44,34 @@ def download_nltk_data():
 download_nltk_data()
 stop_words = set(stopwords.words('english'))
 
-# Initialize BERT with direct download and error handling
+# Initialize BERT with retries and cache clearing
 @st.cache_resource
 def load_bert():
-    try:
-        logger.info("Attempting to load BERT tokenizer and model from Hugging Face")
-        tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-        model = BertModel.from_pretrained('bert-base-uncased')
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        model.eval().to(device)
-        logger.info("BERT model and tokenizer loaded successfully")
-        return tokenizer, model, device
-    except Exception as e:
-        logger.error(f"Error loading BERT: {str(e)}")
-        st.warning(f"Failed to load BERT model: {str(e)}. Text-based features will be unavailable.")
-        return None, None, None
+    max_retries = 3
+    retry_delay = 5  # seconds
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Attempt {attempt + 1}/{max_retries} to load BERT tokenizer and model")
+            # Clear Hugging Face cache to avoid corrupted files
+            cache_dir = os.path.expanduser("~/.cache/huggingface/transformers")
+            if os.path.exists(cache_dir):
+                logger.info(f"Clearing Hugging Face cache at {cache_dir}")
+                shutil.rmtree(cache_dir)
+            tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+            model = BertModel.from_pretrained('bert-base-uncased')
+            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+            model.eval().to(device)
+            logger.info("BERT model and tokenizer loaded successfully")
+            return tokenizer, model, device
+        except Exception as e:
+            logger.error(f"Attempt {attempt + 1} failed: {str(e)}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                time.sleep(retry_delay)
+            else:
+                logger.error("All attempts to load BERT failed")
+                st.warning(f"Failed to load BERT model after {max_retries} attempts: {str(e)}. Text-based features will be unavailable.")
+                return None, None, None
 
 # Load BERT
 bert_tokenizer, bert_model, device = load_bert()
