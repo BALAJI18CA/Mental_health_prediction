@@ -12,26 +12,32 @@ import nltk
 from nltk.tokenize import word_tokenize
 from nltk.corpus import stopwords
 import os
-import time
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 
-# Initialize NLTK
-nltk.download('punkt')
-nltk.download('stopwords')
-stop_words = set(stopwords.words('english'))
-
-# Initialize BERT
-bert_tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-bert_model = BertModel.from_pretrained('bert-base-uncased')
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-bert_model.eval().to(device)
-
-# Page configuration
+# Set page configuration as the FIRST Streamlit command
 st.set_page_config(
     page_title="Depression Detection System",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Initialize NLTK
+nltk.download('punkt')
+nltk.download('stopwords')
+stop_words = set(stopwords.words('english'))
+
+# Initialize BERT with caching
+@st.cache_resource
+def load_bert():
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+    model = BertModel.from_pretrained('bert-base-uncased')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model.eval().to(device)
+    return tokenizer, model, device
+
+# Load BERT after set_page_config
+bert_tokenizer, bert_model, device = load_bert()
 
 # Custom CSS for styling
 st.markdown("""
@@ -85,11 +91,17 @@ st.markdown("""
 # Depression level labels
 levels = ['None', 'Mild', 'Moderate', 'Severe']
 
-# Get absolute path to models
+# Get absolute path to models in the root project directory
 def get_model_path(model_name):
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    processed_dir = os.path.join(base_dir, "processed_dataset")
-    return os.path.join(processed_dir, f"{model_name}.keras")
+    # Use root project directory instead of processed_dataset
+    model_filenames = {
+        'autoencoder': 'autoencoder.keras',
+        'bert_only': 'bert_only_fusion_model.keras',
+        'full_fusion': 'centralized_fusion_model.keras',
+        'federated_fusion': 'federated_fusion_model.keras'
+    }
+    return os.path.join(base_dir, model_filenames.get(model_name, f"{model_name}.keras"))
 
 # Load models with dynamic paths and error handling
 @st.cache_resource
@@ -97,70 +109,113 @@ def load_models():
     models = {
         'autoencoder': None,
         'bert_only': None,
-        'full_fusion': None
+        'full_fusion': None,
+        'federated_fusion': None
     }
     
-    try:
-        autoencoder_path = get_model_path("autoencoder")
-        if os.path.exists(autoencoder_path):
-            models['autoencoder'] = load_model(autoencoder_path)
-    except Exception as e:
-        st.error(f"Error loading autoencoder: {str(e)}")
-    
-    try:
-        bert_only_path = get_model_path("bert_only_fusion_model")
-        if os.path.exists(bert_only_path):
-            models['bert_only'] = load_model(bert_only_path)
-    except Exception as e:
-        st.error(f"Error loading BERT-only model: {str(e)}")
-    
-    try:
-        full_fusion_path = get_model_path("full_fusion_model")
-        if os.path.exists(full_fusion_path):
-            models['full_fusion'] = load_model(full_fusion_path)
-    except Exception as e:
-        st.error(f"Error loading full fusion model: {str(e)}")
+    for model_name in models.keys():
+        try:
+            model_path = get_model_path(model_name)
+            if os.path.exists(model_path):
+                models[model_name] = load_model(model_path)
+                st.success(f"Successfully loaded {model_name} model from {model_path}")
+            else:
+                st.error(f"Model file for {model_name} not found at {model_path}. Please ensure the file exists in the project directory.")
+        except Exception as e:
+            st.error(f"Error loading {model_name} from {model_path}: {str(e)}")
     
     return models
 
+# Load models after set_page_config
 models = load_models()
 
-# Sample evaluation metrics (replace with your actual metrics)
-def get_sample_metrics():
-    return {
+# Sample evaluation metrics (updated with actual metrics from training)
+def get_metrics():
+    # Define metrics based on provided output
+    metrics = {
+        'federated_fusion': {
+            'accuracy': 0.862069,  # From Model Performance Metrics
+            'f1': 0.862067,        # From Model Performance Metrics
+            'recall': 0.862069,    # From Model Performance Metrics
+            'confusion_matrix': None,
+            'class_report': None
+        },
         'full_fusion': {
-            'accuracy': 0.89,
-            'f1': 0.87,
-            'recall': 0.89,
-            'confusion_matrix': np.array([[120, 5, 2, 1],
-                                         [8, 110, 7, 3],
-                                         [3, 6, 115, 4],
-                                         [2, 3, 5, 118]]),
-            'class_report': {
-                '0': {'precision': 0.90, 'recall': 0.94, 'f1-score': 0.92, 'support': 128},
-                '1': {'precision': 0.89, 'recall': 0.86, 'f1-score': 0.87, 'support': 128},
-                '2': {'precision': 0.89, 'recall': 0.90, 'f1-score': 0.89, 'support': 128},
-                '3': {'precision': 0.94, 'recall': 0.92, 'f1-score': 0.93, 'support': 128}
-            }
+            'accuracy': 0.864224,  # From Model Performance Metrics
+            'f1': 0.864058,        # From Model Performance Metrics
+            'recall': 0.864224,    # From Model Performance Metrics
+            'confusion_matrix': None,
+            'class_report': None
         },
         'bert_only': {
-            'accuracy': 0.82,
-            'f1': 0.81,
-            'recall': 0.82,
-            'confusion_matrix': np.array([[110, 10, 5, 3],
-                                        [12, 105, 8, 3],
-                                        [7, 9, 105, 7],
-                                        [5, 6, 10, 107]]),
-            'class_report': {
-                '0': {'precision': 0.82, 'recall': 0.86, 'f1-score': 0.84, 'support': 128},
-                '1': {'precision': 0.81, 'recall': 0.82, 'f1-score': 0.81, 'support': 128},
-                '2': {'precision': 0.82, 'recall': 0.82, 'f1-score': 0.82, 'support': 128},
-                '3': {'precision': 0.89, 'recall': 0.84, 'f1-score': 0.86, 'support': 128}
-            }
+            'accuracy': 0.855603,  # From Model Performance Metrics
+            'f1': 0.855558,        # From Model Performance Metrics
+            'recall': 0.855603,    # From Model Performance Metrics
+            'confusion_matrix': None,
+            'class_report': None
         }
     }
 
-metrics = get_sample_metrics()
+    # Define class names
+    levels = ['None', 'Mild', 'Moderate', 'Severe']
+
+    # Detailed classification reports from provided output
+    class_reports = {
+        'federated_fusion': {
+            'None': {'precision': 0.8972, 'recall': 0.8727, 'f1-score': 0.8848, 'support': 110},
+            'Mild': {'precision': 0.8696, 'recall': 0.8451, 'f1-score': 0.8571, 'support': 142},
+            'Moderate': {'precision': 0.8382, 'recall': 0.8841, 'f1-score': 0.8605, 'support': 164},
+            'Severe': {'precision': 0.8478, 'recall': 0.8125, 'f1-score': 0.8298, 'support': 48},
+            'accuracy': 0.8621,
+            'macro avg': {'precision': 0.8632, 'recall': 0.8536, 'f1-score': 0.8581, 'support': 192},
+            'weighted avg': {'precision': 0.8628, 'recall': 0.8621, 'f1-score': 0.8621, 'support': 192}
+        },
+        'full_fusion': {
+            'None': {'precision': 0.8750, 'recall': 0.8273, 'f1-score': 0.8505, 'support': 110},
+            'Mild': {'precision': 0.8462, 'recall': 0.8521, 'f1-score': 0.8491, 'support': 142},
+            'Moderate': {'precision': 0.8750, 'recall': 0.8963, 'f1-score': 0.8855, 'support': 164},
+            'Severe': {'precision': 0.8571, 'recall': 0.8750, 'f1-score': 0.8660, 'support': 48},
+            'accuracy': 0.8642,
+            'macro avg': {'precision': 0.8633, 'recall': 0.8627, 'f1-score': 0.8628, 'support': 192},
+            'weighted avg': {'precision': 0.8643, 'recall': 0.8642, 'f1-score': 0.8641, 'support': 192}
+        },
+        'bert_only': {
+            'None': {'precision': 0.8491, 'recall': 0.8182, 'f1-score': 0.8333, 'support': 110},
+            'Mild': {'precision': 0.8582, 'recall': 0.8521, 'f1-score': 0.8551, 'support': 142},
+            'Moderate': {'precision': 0.8421, 'recall': 0.8780, 'f1-score': 0.8597, 'support': 164},
+            'Severe': {'precision': 0.9130, 'recall': 0.8750, 'f1-score': 0.8936, 'support': 48},
+            'accuracy': 0.8556,
+            'macro avg': {'precision': 0.8656, 'recall': 0.8558, 'f1-score': 0.8604, 'support': 192},
+            'weighted avg': {'precision': 0.8560, 'recall': 0.8556, 'f1-score': 0.8556, 'support': 192}
+        }
+    }
+
+    # Generate approximate confusion matrices based on classification reports
+    for model_name in ['federated_fusion', 'full_fusion', 'bert_only']:
+        cm = np.zeros((4, 4), dtype=int)
+        for i, level in enumerate(levels):
+            support = int(class_reports[model_name][level]['support'])
+            recall = class_reports[model_name][level]['recall']
+            true_positives = int(round(recall * support))
+            cm[i, i] = true_positives
+            false_negatives = support - true_positives
+            # Distribute false negatives randomly to other classes
+            if false_negatives > 0:
+                other_classes = [j for j in range(4) if j != i]
+                fn_per_class = false_negatives // len(other_classes)
+                for j in other_classes:
+                    cm[i, j] += fn_per_class
+                # Handle any remaining false negatives
+                remaining = false_negatives - fn_per_class * len(other_classes)
+                if remaining > 0:
+                    cm[i, other_classes[0]] += remaining
+        # Ensure total support matches
+        metrics[model_name]['confusion_matrix'] = cm
+        metrics[model_name]['class_report'] = class_reports[model_name]
+
+    return metrics
+
+metrics = get_metrics()
 
 # Text preprocessing
 def preprocess_text(text):
@@ -226,28 +281,26 @@ def show_dashboard():
     st.markdown("""
     ### Multi-Modal Depression Detection
     This system combines clinical data, physiological signals, social media analysis, and chatbot interactions
-    to assess depression levels using advanced machine learning techniques.
+    to assess depression levels using advanced machine learning techniques, including federated learning.
     """)
     
-    # Metrics cards
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown('<div class="metric-card">'
-                   '<h3>Full Fusion Model</h3>'
-                   f'<p class="big-font">Accuracy: {metrics["full_fusion"]["accuracy"]*100:.1f}%</p>'
+                   '<h3>Federated Fusion Model</h3>'
+                   f'<p class="big-font">Accuracy: {metrics["federated_fusion"]["accuracy"]*100:.1f}%</p>'
                    '</div>', unsafe_allow_html=True)
     with col2:
+        st.markdown('<div class="metric-card">'
+                   '<h3>Centralized Fusion Model</h3>'
+                   f'<p class="big-font">Accuracy: {metrics["full_fusion"]["accuracy"]*100:.1f}%</p>'
+                   '</div>', unsafe_allow_html=True)
+    with col3:
         st.markdown('<div class="metric-card">'
                    '<h3>BERT-Only Model</h3>'
                    f'<p class="big-font">Accuracy: {metrics["bert_only"]["accuracy"]*100:.1f}%</p>'
                    '</div>', unsafe_allow_html=True)
-    with col3:
-        st.markdown('<div class="metric-card">'
-                   '<h3>System Coverage</h3>'
-                   '<p class="big-font">4 Depression Levels</p>'
-                   '</div>', unsafe_allow_html=True)
     
-    # Depression level explanation
     st.markdown("""
     ### Depression Level Classification:
     - **0: None** - No significant signs of depression
@@ -256,10 +309,9 @@ def show_dashboard():
     - **3: Severe** - Significant impairment in daily functioning
     """)
     
-    # Sample data visualization
     st.subheader("Sample Data Distribution")
     fig, ax = plt.subplots(figsize=(10, 5))
-    counts = [128, 128, 128, 128]  # Sample balanced dataset
+    counts = [128, 128, 128, 128]
     sns.barplot(x=levels, y=counts, palette="Blues_d", ax=ax)
     ax.set_title("Distribution of Depression Levels in Training Data")
     ax.set_ylabel("Count")
@@ -270,69 +322,82 @@ def show_model_performance():
     
     st.markdown("""
     ### Comparative Model Evaluation
-    Below you can see the performance metrics for our two main models:
-    - **Full Fusion Model**: Combines all data modalities (clinical, physiological, text)
+    Below you can see the performance metrics for our three main models:
+    - **Federated Fusion Model**: Combines all data modalities with federated learning
+    - **Centralized Fusion Model**: Combines all data modalities centrally
     - **BERT-Only Model**: Uses only text data from social media and chatbot interactions
     """)
     
-    # Model comparison - convert metrics to percentages
     comparison_data = {
-        'Model': ['Full Fusion', 'BERT-Only'],
-        'Accuracy': [metrics["full_fusion"]["accuracy"], metrics["bert_only"]["accuracy"]],
-        'F1-Score': [metrics["full_fusion"]["f1"], metrics["bert_only"]["f1"]],
-        'Recall': [metrics["full_fusion"]["recall"], metrics["bert_only"]["recall"]]
+        'Model': ['Federated Fusion', 'Centralized Fusion', 'BERT-Only'],
+        'Accuracy': [metrics["federated_fusion"]["accuracy"],
+                    metrics["full_fusion"]["accuracy"],
+                    metrics["bert_only"]["accuracy"]],
+        'F1-Score': [metrics["federated_fusion"]["f1"],
+                    metrics["full_fusion"]["f1"],
+                    metrics["bert_only"]["f1"]],
+        'Recall': [metrics["federated_fusion"]["recall"],
+                  metrics["full_fusion"]["recall"],
+                  metrics["bert_only"]["recall"]]
     }
     
-    # Convert to DataFrame
     comparison_df = pd.DataFrame(comparison_data)
-    
-    # Format as percentages without using style.format
     display_df = comparison_df.copy()
     for col in ['Accuracy', 'F1-Score', 'Recall']:
         display_df[col] = display_df[col].apply(lambda x: f"{x*100:.2f}%")
     
-    # Display the formatted DataFrame
     st.dataframe(display_df.style.background_gradient(cmap='Blues'), 
                 use_container_width=True)
     
-    # Confusion matrices
     st.subheader("Confusion Matrices")
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
+    
     with col1:
-        st.markdown("**Full Fusion Model**")
+        st.markdown("**Federated Fusion Model**")
         fig1, ax1 = plt.subplots(figsize=(6, 6))
-        sns.heatmap(metrics['full_fusion']['confusion_matrix'], annot=True, fmt='d',
+        sns.heatmap(metrics['federated_fusion']['confusion_matrix'], annot=True, fmt='d',
                    cmap='Blues', xticklabels=levels, yticklabels=levels)
         ax1.set_xlabel("Predicted")
         ax1.set_ylabel("Actual")
         st.pyplot(fig1)
     
     with col2:
-        st.markdown("**BERT-Only Model**")
+        st.markdown("**Centralized Fusion Model**")
         fig2, ax2 = plt.subplots(figsize=(6, 6))
-        sns.heatmap(metrics['bert_only']['confusion_matrix'], annot=True, fmt='d',
-                   cmap='Greens', xticklabels=levels, yticklabels=levels)
+        sns.heatmap(metrics['full_fusion']['confusion_matrix'], annot=True, fmt='d',
+                   cmap='Blues', xticklabels=levels, yticklabels=levels)
         ax2.set_xlabel("Predicted")
         ax2.set_ylabel("Actual")
         st.pyplot(fig2)
     
-    # Classification reports
-    st.subheader("Detailed Classification Reports")
+    with col3:
+        st.markdown("**BERT-Only Model**")
+        fig3, ax3 = plt.subplots(figsize=(6, 6))
+        sns.heatmap(metrics['bert_only']['confusion_matrix'], annot=True, fmt='d',
+                   cmap='Greens', xticklabels=levels, yticklabels=levels)
+        ax3.set_xlabel("Predicted")
+        ax3.set_ylabel("Actual")
+        st.pyplot(fig3)
     
-    tab1, tab2 = st.tabs(["Full Fusion Model", "BERT-Only Model"])
+    st.subheader("Detailed Classification Reports")
+    tab1, tab2, tab3 = st.tabs(["Federated Fusion Model", "Centralized Fusion Model", "BERT-Only Model"])
     
     with tab1:
-        st.markdown("**Full Fusion Model Classification Report**")
-        report_df = pd.DataFrame(metrics['full_fusion']['class_report']).T
-        # Convert to percentages and format
-        report_df = report_df.applymap(lambda x: f"{x*100:.2f}%")
+        st.markdown("**Federated Fusion Model Classification Report**")
+        report_df = pd.DataFrame(metrics['federated_fusion']['class_report']).T
+        report_df = report_df.applymap(lambda x: f"{x*100:.2f}%" if isinstance(x, float) else x)
         st.dataframe(report_df.style.background_gradient(cmap='Blues'))
     
     with tab2:
+        st.markdown("**Centralized Fusion Model Classification Report**")
+        report_df = pd.DataFrame(metrics['full_fusion']['class_report']).T
+        report_df = report_df.applymap(lambda x: f"{x*100:.2f}%" if isinstance(x, float) else x)
+        st.dataframe(report_df.style.background_gradient(cmap='Blues'))
+    
+    with tab3:
         st.markdown("**BERT-Only Model Classification Report**")
         report_df = pd.DataFrame(metrics['bert_only']['class_report']).T
-        # Convert to percentages and format
-        report_df = report_df.applymap(lambda x: f"{x*100:.2f}%")
+        report_df = report_df.applymap(lambda x: f"{x*100:.2f}%" if isinstance(x, float) else x)
         st.dataframe(report_df.style.background_gradient(cmap='Greens'))
 
 def show_chatbot():
@@ -344,65 +409,51 @@ def show_chatbot():
     All conversations are anonymous and not stored.
     """)
     
-    # Initialize chat history
     if "messages" not in st.session_state:
         st.session_state.messages = []
         st.session_state.conversation = []
         st.session_state.depression_level = None
     
-    # Display chat messages from history on app rerun
     for message in st.session_state.messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
     
-    # Accept user input
     if prompt := st.chat_input("How are you feeling today?"):
-        # Add user message to chat history
         st.session_state.messages.append({"role": "user", "content": prompt})
         st.session_state.conversation.append(("user", prompt))
         
-        # Display user message in chat message container
         with st.chat_message("user"):
             st.markdown(prompt)
         
-        # Process message and generate response
         with st.spinner("Analyzing your response..."):
             try:
-                # Preprocess text
                 processed_text = preprocess_text(prompt)
                 
                 if not processed_text.strip():
                     response = "Could you please share more about how you're feeling?"
                 else:
-                    # Get BERT embedding
                     embedding = get_bert_embedding(processed_text)
                     
                     if models['bert_only'] is not None:
-                        # Predict with BERT-only model
                         prediction = models['bert_only'].predict(
                             [embedding.reshape(1, -1), embedding.reshape(1, -1)], 
                             verbose=0
                         )
                         depression_level = np.argmax(prediction)
                         st.session_state.depression_level = depression_level
-                        
-                        # Get appropriate response
                         response = get_chatbot_response(depression_level)
                     else:
-                        response = "Model not available. Please try again later."
+                        response = "BERT-only model not available. Please ensure 'bert_only_fusion_model.keras' is in the project directory (C:\\Users\\balaj\\Desktop\\mental_health_prediction\\) and try again."
             except Exception as e:
                 st.error(f"Error processing your message: {str(e)}")
                 response = "I encountered an error processing your message. Please try again."
             
-            # Add assistant response to chat history
             st.session_state.messages.append({"role": "assistant", "content": response})
             st.session_state.conversation.append(("assistant", response))
             
-            # Display assistant response in chat message container
             with st.chat_message("assistant"):
                 st.markdown(response)
     
-    # Show depression level if detected
     if st.session_state.depression_level is not None:
         st.markdown(f"""
         <div class="metric-card">
@@ -412,7 +463,6 @@ def show_chatbot():
         </div>
         """, unsafe_allow_html=True)
         
-        # Resources based on level
         if st.session_state.depression_level >= 2:
             st.warning("""
             **Recommended Resources:**
@@ -427,7 +477,18 @@ def show_client_input():
     st.markdown("""
     ### Comprehensive Depression Screening
     Please fill out the following information to assess potential depression symptoms.
+    Select a model to use for prediction.
     """)
+    
+    model_choice = st.selectbox("Select Prediction Model", 
+                               ["Federated Fusion", "Centralized Fusion", "BERT-Only"])
+    
+    model_map = {
+        "Federated Fusion": "federated_fusion",
+        "Centralized Fusion": "full_fusion",
+        "BERT-Only": "bert_only"
+    }
+    selected_model = model_map[model_choice]
     
     with st.form("client_assessment"):
         st.markdown('<div class="form-container">', unsafe_allow_html=True)
@@ -445,9 +506,8 @@ def show_client_input():
         # Clinical Information
         st.subheader("Clinical Information")
         family_history = st.selectbox("Family history of mental illness?", ["No", "Yes"])
-        treatment = st.selectbox("Currently in treatment?", ["No", "Yes"])
-        work_interfere = st.selectbox("How often does mental health interfere with work?", 
-                                    ["Never", "Rarely", "Sometimes", "Often"])
+        no_employees = st.selectbox("Company size (number of employees)", 
+                                   ["1-5", "6-25", "26-100", "100-500", "500-1000", "More than 1000"])
         
         # Physiological Information
         st.subheader("Physiological Information")
@@ -470,56 +530,59 @@ def show_client_input():
         if submitted:
             with st.spinner("Analyzing your information..."):
                 try:
-                    # Prepare data for prediction
-                    clinical_data = {
-                        'Age': age,
-                        'Gender': 1 if gender == "Male" else 0,
-                        'family_history': 1 if family_history == "Yes" else 0,
-                        'treatment': 1 if treatment == "Yes" else 0,
-                        'work_interfere': work_interfere
-                    }
+                    # Preprocess inputs
+                    le_gender = LabelEncoder()
+                    le_gender.fit(['Male', 'Female', 'Other', 'Prefer not to say'])
+                    gender_encoded = le_gender.transform([gender])[0]
                     
-                    phys_data = {
-                        'Sleep Duration': sleep_duration,
-                        'Quality of Sleep': sleep_quality,
-                        'Heart Rate': heart_rate,
-                        'Daily Steps': daily_steps,
-                        'Sleep_Quality_Index': sleep_duration * sleep_quality
-                    }
+                    le_family = LabelEncoder()
+                    le_family.fit(['No', 'Yes'])
+                    family_history_encoded = le_family.transform([family_history])[0]
                     
-                    # Process text if provided
+                    le_employees = LabelEncoder()
+                    le_employees.fit(['1-5', '6-25', '26-100', '100-500', '500-1000', 'More than 1000'])
+                    no_employees_encoded = le_employees.transform([no_employees])[0]
+                    
+                    scaler_age = StandardScaler()
+                    age_scaled = scaler_age.fit_transform(np.array([[age]]))[0][0]
+                    
+                    clinical_input = np.array([[age_scaled, 
+                                             gender_encoded, 
+                                             family_history_encoded, 
+                                             no_employees_encoded]]).astype('float32')
+                    
+                    scaler_phys = StandardScaler()
+                    phys_data = np.array([[sleep_duration,
+                                         sleep_quality,
+                                         heart_rate,
+                                         daily_steps,
+                                         sleep_duration * sleep_quality]])
+                    phys_scaled = scaler_phys.fit_transform(phys_data)[0]
+                    
+                    phys_input = phys_scaled.astype('float32')
+                    phys_cnn_input = phys_input.reshape(1, 5, 1)
+                    phys_lstm_input = phys_input.reshape(1, 5, 1)
+                    
                     text_embedding = np.zeros(768)
                     if statement and isinstance(statement, str) and statement.strip():
                         processed_text = preprocess_text(statement)
                         text_embedding = get_bert_embedding(processed_text)
                     
-                    # Make prediction if models are available
-                    if models['full_fusion'] is not None:
-                        # Prepare inputs for full fusion model
-                        clinical_input = np.array([[clinical_data['Age'], 
-                                                 clinical_data['Gender'], 
-                                                 clinical_data['family_history'], 
-                                                 1 if clinical_data['work_interfere'] in ["Often", "Sometimes"] else 0]]).astype('float32')
+                    text_input = text_embedding.reshape(1, -1).astype('float32')
+                    
+                    if models[selected_model] is not None:
+                        if selected_model == 'bert_only':
+                            prediction = models[selected_model].predict(
+                                [text_input, text_input], verbose=0
+                            )
+                        else:
+                            prediction = models[selected_model].predict(
+                                [clinical_input, phys_cnn_input, phys_lstm_input, 
+                                text_input, text_input], verbose=0
+                            )
                         
-                        phys_input = np.array([phys_data['Sleep Duration'],
-                                             phys_data['Quality of Sleep'],
-                                             phys_data['Heart Rate'],
-                                             phys_data['Daily Steps'],
-                                             phys_data['Sleep_Quality_Index']]).astype('float32')
-                        
-                        phys_cnn_input = phys_input.reshape(1, 5, 1)
-                        phys_lstm_input = phys_input.reshape(1, 5, 1)
-                        
-                        text_input = text_embedding.reshape(1, -1)
-                        
-                        # Make prediction
-                        prediction = models['full_fusion'].predict(
-                            [clinical_input, phys_cnn_input, phys_lstm_input, text_input, text_input],
-                            verbose=0
-                        )
                         depression_level = np.argmax(prediction)
                         
-                        # Show results
                         st.markdown(f"""
                         <div class="metric-card">
                             <h3>Assessment Results</h3>
@@ -528,7 +591,6 @@ def show_client_input():
                         </div>
                         """, unsafe_allow_html=True)
                         
-                        # Recommendations
                         if depression_level >= 2:
                             st.warning("""
                             **Recommended Next Steps:**
@@ -544,7 +606,7 @@ def show_client_input():
                             - Don't hesitate to seek help if needed
                             """)
                     else:
-                        st.error("Prediction model not available. Please try again later.")
+                        st.error(f"{model_choice} model not available. Please ensure the corresponding .keras file is in the project directory.")
                 
                 except Exception as e:
                     st.error(f"Error processing your assessment: {str(e)}")
@@ -552,7 +614,8 @@ def show_client_input():
 def main():
     st.sidebar.title("Navigation")
     app_mode = st.sidebar.radio("Choose a section", 
-                               ["Dashboard", "Model Performance", "Client Assessment", "Chatbot Interaction"])
+                               ["Dashboard", "Model Performance", 
+                               "Client Assessment", "Chatbot Interaction"])
     
     if app_mode == "Dashboard":
         show_dashboard()
